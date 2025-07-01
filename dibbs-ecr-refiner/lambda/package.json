@@ -1,0 +1,21 @@
+{
+  "name": "dibbs-ecr-refiner-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function for dibbs-ecr-refiner pipeline",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.470.0",
+    "@aws-sdk/client-sqs": "^3.470.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "lambda",
+    "aws",
+    "s3",
+    "sqs"
+  ]
+} 

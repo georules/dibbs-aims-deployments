@@ -1,0 +1,122 @@
+stages:
+  - prepare
+  - build
+  - push-github
+  - sync-ecr
+  - deploy
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  AWS_DEFAULT_REGION: "us-east-1"
+  TF_ROOT: "${CI_PROJECT_DIR}/terraform"
+  GITHUB_IMAGE: "ghcr.io/${GITHUB_ORG}/dibbs-ecr-refiner"
+  ECR_REPO: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/dibbs-ecr-refiner/lambda"
+
+# Cache dependencies between jobs
+cache:
+  paths:
+    - terraform/.terraform/
+
+# Prepare stage - validate and plan
+prepare:
+  stage: prepare
+  image: hashicorp/terraform:1.5
+  before_script:
+    - cd $TF_ROOT
+    - terraform init
+  script:
+    - terraform validate
+    - terraform plan -var="ecr_image_uri=${ECR_REPO}:${CI_COMMIT_TAG}" -out=tfplan
+  artifacts:
+    paths:
+      - $TF_ROOT/tfplan
+    expire_in: 1 hour
+  only:
+    - tags
+  when: manual
+
+# Build stage - build the Docker image
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USERNAME --password-stdin
+  script:
+    - cd lambda
+    - docker build -t ${GITHUB_IMAGE}:${CI_COMMIT_SHA} .
+    - docker build -t ${GITHUB_IMAGE}:${CI_COMMIT_TAG} .
+    - docker build -t ${GITHUB_IMAGE}:latest .
+  only:
+    - tags
+    - main
+
+# Push to GitHub Container Registry
+push-github:
+  stage: push-github
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USERNAME --password-stdin
+  script:
+    - docker pull ${GITHUB_IMAGE}:${CI_COMMIT_TAG}
+    - docker push ${GITHUB_IMAGE}:${CI_COMMIT_SHA}
+    - docker push ${GITHUB_IMAGE}:${CI_COMMIT_TAG}
+    - docker push ${GITHUB_IMAGE}:latest
+  only:
+    - tags
+  dependencies:
+    - build
+
+# Sync to Amazon ECR
+sync-ecr:
+  stage: sync-ecr
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USERNAME --password-stdin
+    - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+  script:
+    - docker pull ${GITHUB_IMAGE}:${CI_COMMIT_TAG}
+    - docker tag ${GITHUB_IMAGE}:${CI_COMMIT_TAG} ${ECR_REPO}:${CI_COMMIT_TAG}
+    - docker tag ${GITHUB_IMAGE}:${CI_COMMIT_TAG} ${ECR_REPO}:latest
+    - docker push ${ECR_REPO}:${CI_COMMIT_TAG}
+    - docker push ${ECR_REPO}:latest
+  only:
+    - tags
+  dependencies:
+    - push-github
+
+# Deploy with Terraform
+deploy:
+  stage: deploy
+  image: hashicorp/terraform:1.5
+  before_script:
+    - cd $TF_ROOT
+    - terraform init
+  script:
+    - terraform apply -var="ecr_image_uri=${ECR_REPO}:${CI_COMMIT_TAG}" -auto-approve
+  only:
+    - tags
+  dependencies:
+    - sync-ecr
+  when: manual
+
+# Test deployment
+test-deployment:
+  stage: deploy
+  image: node:18-alpine
+  before_script:
+    - cd scripts
+    - npm install
+  script:
+    - node test_deployment.js
+  only:
+    - tags
+  dependencies:
+    - deploy
+  when: manual 
