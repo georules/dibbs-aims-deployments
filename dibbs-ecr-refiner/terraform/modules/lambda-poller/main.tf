@@ -168,6 +168,29 @@ resource "aws_sqs_queue" "refiner_complete" {
   visibility_timeout_seconds = 910
 }
 
+resource "aws_sqs_queue_policy" "refiner_complete_policy" {
+  queue_url = aws_sqs_queue.refiner_complete.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.refiner_complete.arn
+        Condition = {
+          ArnEquals = {
+            "aws:SourceArn": aws_cloudwatch_event_rule.refiner_complete_events.arn
+          }
+        }
+      }
+    ]
+  })
+} 
+
 # ECR Repository
 resource "aws_ecr_repository" "lambda" {
   name                 = "dibbs-aims-helloworld/lambda"
